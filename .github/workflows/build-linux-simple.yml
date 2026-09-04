@@ -1,0 +1,137 @@
+name: Build Linux Server (Simple)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Cef.so (Linux x64)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      CMAKE_VERSION: 3.31.10
+
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dpkg --add-architecture i386 || true
+          apt-get update
+
+          apt-get install -y --no-install-recommends \
+            ca-certificates git \
+            build-essential ninja-build pkg-config \
+            curl zip unzip tar python3 \
+            binutils patch \
+            gcc-multilib g++-multilib linux-libc-dev:i386 \
+            autoconf automake libtool m4 gettext
+
+          echo "Installing CMake ${CMAKE_VERSION}..."
+          curl -fsSL -o cmake.tar.gz "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p /opt/cmake
+          tar -xzf cmake.tar.gz -C /opt/cmake --strip-components=1
+          rm -f cmake.tar.gz
+
+          echo "/opt/cmake/bin" >> "$GITHUB_PATH"
+
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout code and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup vcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -d "${VCPKG_ROOT}/.git" ]]; then
+            git clone https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}"
+          else
+            if git -C "${VCPKG_ROOT}" rev-parse --is-shallow-repository | grep -q true; then
+              git -C "${VCPKG_ROOT}" fetch --unshallow --prune --tags
+            else
+              git -C "${VCPKG_ROOT}" fetch --prune --tags
+            fi
+          fi
+
+          "${VCPKG_ROOT}/bootstrap-vcpkg.sh"
+
+      - name: vcpkg install (manifest)
+        shell: bash
+        env:
+          VCPKG_FEATURE_FLAGS: manifests,binarycaching
+        run: |
+          set -euo pipefail
+          "${VCPKG_ROOT}/vcpkg" install \
+            --triplet x64-linux \
+            --feature-flags=manifests,binarycaching \
+            --x-feature=server
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VCPKG_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_FEATURE_FLAGS=manifests\;binarycaching \
+            -DVCPKG_MANIFEST_FEATURES=server \
+            -DDEV_ALL_TARGETS=OFF \
+            -DBUILD_CLIENT=OFF \
+            -DBUILD_SERVER_OMP=ON \
+            -DBUILD_SERVER_SAMP=OFF
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --config Release --target ServerOmp --parallel
+
+      - name: Stage Server Binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf artifact-server
+          mkdir -p artifact-server
+
+          mapfile -t candidates < <(
+            find build -type f -name "Cef.so" \
+              -not -path "*/vcpkg_installed/*" \
+              -not -path "*/CMakeFiles/*" \
+              -print
+          )
+
+          echo "Candidates for Cef.so:"
+          if [[ "${#candidates[@]}" -gt 0 ]]; then
+            printf ' - %s\n' "${candidates[@]}"
+          fi
+
+          if [[ "${#candidates[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one Linux server binary named Cef.so, found ${#candidates[@]}"
+            exit 1
+          fi
+
+          cp "${candidates[0]}" "artifact-server/Cef.so"
+
+          echo "Staged Linux server artifact:"
+          ls -la artifact-server
+
+      - name: Upload Server Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cef-so-linux-x64
+          path: artifact-server/*
