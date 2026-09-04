@@ -100,7 +100,7 @@ void CefOmpComponent::provideConfiguration(ILogger& logger, IEarlyConfig& config
     const int port_value = (port_ptr && *port_ptr > 0 && *port_ptr <= 65535) ? *port_ptr : 7777;
     
     server_port_ = static_cast<uint16_t>(port_value);
-    cef_network_port_ = static_cast<uint16_t>(port_value + 2);
+    cef_network_port_ = static_cast<uint16_t>(port_value - 4);
 
 	if (defaults) {
 		config.setBool("cef.debug", false);
