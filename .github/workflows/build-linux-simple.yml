@@ -1,11 +1,11 @@
-name: Build Linux Server (Simple)
+name: Build Linux Server (Simple - x86)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Cef.so (Linux x64)
+    name: Build Cef.so (Linux x86 32-bit)
     runs-on: ubuntu-latest
     container:
       image: ubuntu:20.04
@@ -71,9 +71,24 @@ jobs:
         run: |
           set -euo pipefail
           "${VCPKG_ROOT}/vcpkg" install \
-            --triplet x64-linux \
+            --triplet x86-linux \
             --feature-flags=manifests,binarycaching \
             --x-feature=server
+
+      - name: Prepare 32-bit Linux toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/cmake"
+          cat > "${GITHUB_WORKSPACE}/cmake/linux-i386-toolchain.cmake" << 'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR x86)
+
+          set(CMAKE_C_FLAGS   "-m32" CACHE STRING "" FORCE)
+          set(CMAKE_CXX_FLAGS "-m32" CACHE STRING "" FORCE)
+          set(CMAKE_EXE_LINKER_FLAGS    "-m32" CACHE STRING "" FORCE)
+          set(CMAKE_SHARED_LINKER_FLAGS "-m32" CACHE STRING "" FORCE)
+          EOF
 
       - name: Configure CMake
         shell: bash
@@ -86,7 +101,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_TOOLCHAIN_FILE" \
-            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_TARGET_TRIPLET=x86-linux \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=${GITHUB_WORKSPACE}/cmake/linux-i386-toolchain.cmake \
             -DVCPKG_FEATURE_FLAGS=manifests\;binarycaching \
             -DVCPKG_MANIFEST_FEATURES=server \
             -DDEV_ALL_TARGETS=OFF \
@@ -133,5 +149,5 @@ jobs:
       - name: Upload Server Binary
         uses: actions/upload-artifact@v4
         with:
-          name: cef-so-linux-x64
+          name: cef-so-linux-x86
           path: artifact-server/*
